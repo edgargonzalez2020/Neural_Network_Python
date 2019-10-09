@@ -8,15 +8,15 @@ class Layer:
 		self.input_shape = int(input_shape)
 		self.output_shape = int(output_shape)
 		self.lr = int(learning_rate)
+		np.random.seed(1)
 		self.weights = np.random.uniform(-0.5, 0.5, (self.input_shape, self.output_shape))
-		self.biases = np.ones(self.output_shape)
+		self.biases = np.zeros(self.output_shape)
 	def update_lr(self, x):
 		self.lr = x
 	def feedforward(self, x):
-		return self.sigmoid(np.dot(x, self.weights) + self.biases)
-	@staticmethod
-	def sigmoid(x):
-		return 1 / (1 - np.exp(-x))
+		return self.sigmoid(np.dot(x, self.weights))
+	def sigmoid(self,x):
+		return 1 / (1 + np.exp(-x))
 	@staticmethod
 	def sigmoid_prime(x):
 		return x * (1 - x)
@@ -29,8 +29,11 @@ class LossFunction:
 	def derivative(actual, predicted):
 		return predicted - actual
 	@staticmethod
-	def delta(actual, predicted,activation_function_derivative):
-		return (predicted - actual) * activation_function_derivative(predicted)
+	def delta(actual, predicted):
+		return (predicted - actual) * (predicted * (1 - predicted))
+	@staticmethod
+	def loss(actual,predicted):
+		return np.mean((predicted-actual)**2)
 
 
 
@@ -40,7 +43,8 @@ class NN:
 		self.input_shape = None
 		self.output_shape = None
 		self.training_max = None
-		self.test_max = None
+
+		self.mapping = {}
 
 		self.layers = int(layer_count)
 		self.units_per_layer = int(units_per_layer)
@@ -48,7 +52,7 @@ class NN:
 
 
 		self.training_data = self.load(training_path, True) / self.training_max
-		self.test_data = self.load(test_path, False) / self.test_max
+		self.test_data = self.load(test_path, False) / self.training_max
 		self.network = []
 		for j in range(self.layers):
 			if j == 0: 
@@ -63,42 +67,47 @@ class NN:
 			self.training_max = np.amax(data)
 		else:
 			self.make_one_hot(data[:, [-1]], False)
-			self.test_max = np.amax(data)
 		self.input_shape = data.shape[1] - 1
 		self.output_shape = self.training_labels.shape[1]
 		return data[: , [x for x in range(data.shape[1] - 1 )]]
 	def make_one_hot(self, labels, is_training):
-		col_max = np.asscalar(np.max(labels))
-		ones_arr = np.zeros((labels.shape[0], int(col_max)))
-		for i,x in enumerate(labels):
-			ones_arr[i][max(0, int(x) - 1)] = 1
+		labels_set = set()
+		for x in labels:
+			labels_set.add(int(np.asscalar(x)))
+		labels_set = sorted(labels_set)
+		for i,x in enumerate(labels_set):
+			self.mapping[x] = i
+		zeros_arr = np.zeros((labels.shape[0],len(labels_set)))
+		for i,y in enumerate(labels):
+			number = int(np.asscalar(y))
+			idx = self.mapping[number]
+			zeros_arr[i][idx] = 1
 		if is_training:
-			self.training_labels = ones_arr
+			self.training_labels = zeros_arr
 		else:
-			self.test_labels = ones_arr
+			self.test_labels = zeros_arr
 	def feedforward(self, x):
 		Z = []
 		input_ = x
-		for y in self.network:
-			Z.append(y.feedforward(input_))
+		for i,y in enumerate(self.network):
+			res = y.feedforward(input_)
+			Z.append(res)
 			input_ = Z[-1]
 		return Z
 	def backprop(self, Z,label):
-		## The indices in this loop are iffy make sure to check back on these if a 
-		## problem arises
 		derivative_cache = {}
-		delta = LossFunction.delta(label, Z[-1], Layer.sigmoid_prime)
-		derivative = np.dot(np.array(Z[:-2]).T, delta)
-		derivative_cache[len(self.network) - 1] = (derivative, delta)
-		for i in range(len(Z) - 1, 1, -1):
-			delta = np.dot(delta, self.network[i].weights.T)
-			derivative = np.dot(np.array(Z[: i - 1]).T, delta)
-			derivative_cache[i - 1] = (derivative, delta)
+		## Delta value of the output layer 
+		delta = LossFunction.delta(label, Z[-1])
+		#derivative = np.dot(np.array(Z[-2]).reshape(1,len(Z[-2])).T, delta)
+		derivative_cache[len(self.network) - 1] = delta
+		for i in reversed(range(1,len(Z))):
+			delta = np.dot(delta, self.network[i].weights.T) * Layer.sigmoid_prime(Z[i - 1])
+			#derivative = np.dot( np.array(Z[i - 1]).reshape(1,len(Z[i-1])).T, delta)
+			derivative_cache[i - 1] = delta
 		for k,v in derivative_cache.items():
-			self.network[k].weights -= self.network[k].lr * v[0]
-			self.network[k].biases -= self.network[k].lr * np.mean(v[1], 0)
+			self.network[k].weights = self.network[k].weights - (self.network[k].lr * v)
+			#self.network[k].biases = self.network[k].biases - self.network[k].lr * np.mean(v[1], 0)
 			self.network[k].update_lr(self.network[k].lr * 0.98)
-
 	def train(self):
 		for j in range(self.epochs):
 			for i, x in enumerate(self.training_data):
@@ -106,12 +115,45 @@ class NN:
 				self.backprop(Z,self.training_labels[i].reshape(1,self.training_labels.shape[1]))
 	def predict(self, x):
 		return self.feedforward(x)[-1]
+	def run_predictions(self):
+		count = 1
+		avg = 0
+		for i,y in enumerate(self.test_data):
+			prediction = self.feedforward(y)[-1]
+			print(prediction)
+			predicted = self.get_class(prediction)
+			true = self.get_class(self.test_labels[i])
+			accuracy = 1 if predicted == true else 0
+			print("ID=%5d, predicted=%3d, true=%3d, accuracy=%4.2f\n" % (
+				count, predicted, true, accuracy))
+			count += 1
+			avg += accuracy
+		print("classification accuracy=%6.4f" % (avg / (count-1)))
+
+	def get_class(self, vec):
+		return np.argmax(vec, axis=0)
+	def print_meta(self):
+		print(f'Layers: {self.layers}')
+		print(f'Units: {self.units_per_layer}')
+		print(f'Epochs: {self.epochs}')
+		print(f'Input Shape: {self.input_shape}')
+		print(f'Output Shape: {self.output_shape}')
 def main():
 	if len(sys.argv) < 6:
 		print('Usage: [path to training file] [path to test file] layer_count units_per_layer rounds')
 	classifier = NN(*sys.argv[1:6])
+	#classifier.print_meta()
 	classifier.train()
-	print('Actual:', classifier.test_labels[0])
-	print('Predicted:', classifier.predict(classifier.test_data[0]))
+	classifier.run_predictions()
+	# print()
+	# print()
+	# print()
+	# for x,i in enumerate(classifier.test_data):
+	# 	prediction = classifier.feedforward(classifier.test_data[x])[-1]
+	# 	print(prediction, prediction.shape)
+	# 	print(classifier.test_labels[x], classifier.test_labels[x].shape)
+	# 	print(classifier.get_class(prediction))
+	# 	print()
+	# 	print()
 if __name__ == '__main__':
 	main()

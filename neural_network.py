@@ -87,13 +87,13 @@ class NN:
 	def feed_forward(self, x):
 		## Not sure if this weights update will work
 		Z, A = self.create_ZA(x)
+		for x in self.weights:
+			print(x, x.shape)
+			print()
 		for i in range(self.layers):
-			for j in range(self.units_per_layer + 1):
-				A[self.D + j] = self.weights[i][j] * Z[self.D + j]
-				Z[self.D + j] = self.sigmoid(A[self.D + j])
+			break
 		return Z,A
 	def backprop(self, Z , A, t):
-		print(Z)
 		idx = self.D + (self.units_per_layer * self.layers)
 		Delta = np.zeros(self.U)
 		# for i, x in enumerate(range(idx, len(Z))):
